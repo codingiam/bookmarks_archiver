@@ -1,1 +1,12 @@
-[].
+%% THIS FILE IS GENERATED. DO NOT EDIT IT MANUALLY %%
+
+{require_otp_vsn,"20"}.
+{cover_enabled,true}.
+{erl_opts,[debug_info,fail_on_warning]}.
+{eunit_opts,[verbose]}.
+{erlydtl_opts,[{compiler_options,[report,return,debug_info]}]}.
+{deps,[{rebar_lock_deps_plugin,".*",
+                               {git,"git://github.com/seth/rebar_lock_deps_plugin.git",
+                                    "8816f45ff38cd04d5c7741bd39166af58116dd44"}}]}.
+{plugins,[rebar_lock_deps_plugin]}.
+
