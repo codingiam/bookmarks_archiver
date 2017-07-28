@@ -16,3 +16,5 @@ _*
 log
 logs
 _build
+.idea
+bookmarks_archiver.iml
