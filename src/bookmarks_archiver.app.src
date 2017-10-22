@@ -2,12 +2,12 @@
  [{description, "An OTP application"},
   {vsn, "0.1.0"},
   {registered, []},
-  {mod, { bookmarks_archiver_app, []}},
+  {mod, { ba_app, []}},
   {applications,
    [kernel,
     stdlib
    ]},
-  {env,[]},
+  {env,[{cookie, 'SecretCookie'}]},
   {modules, []},
 
   {maintainers, []},

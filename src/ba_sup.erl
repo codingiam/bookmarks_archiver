@@ -1,16 +1,11 @@
-%%%-------------------------------------------------------------------
-%% @doc bookmarks_archiver top level supervisor.
-%% @end
-%%%-------------------------------------------------------------------
-
--module(bookmarks_archiver_sup).
+-module(ba_sup).
 
 -behaviour(supervisor).
 
 %% API
 -export([start_link/0]).
 
-%% Supervisor callbacks
+%% Callbacks
 -export([init/1]).
 
 -define(SERVER, ?MODULE).
@@ -23,10 +18,9 @@ start_link() ->
     supervisor:start_link({local, ?SERVER}, ?MODULE, []).
 
 %%====================================================================
-%% Supervisor callbacks
+%% Callbacks
 %%====================================================================
 
-%% Child :: {Id,StartFunc,Restart,Shutdown,Type,Modules}
 init([]) ->
     {ok, { {one_for_all, 0, 1}, []} }.
 
