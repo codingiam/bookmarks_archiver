@@ -5,7 +5,8 @@
   {mod, { ba_app, []}},
   {applications,
    [kernel,
-    stdlib
+    stdlib,
+    gun
    ]},
   {env,[{cookie, 'SecretCookie'}]},
   {modules, []},
