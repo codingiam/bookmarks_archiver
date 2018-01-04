@@ -18,3 +18,5 @@ logs
 _build
 .idea
 bookmarks_archiver.iml
+.project
+tmp
