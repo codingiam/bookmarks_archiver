@@ -3,7 +3,7 @@
 -behaviour(gen_statem).
 
 %% API
--export([start/0, start_link/0, connect/0, get/0]).
+-export([start/0, start_link/0, connect/0, get_json/0]).
 
 %% Callbacks
 -export([
@@ -18,7 +18,9 @@
 
 -define(SERVER, ?MODULE).
 
--record(state, {conn_pid}).
+-define(WAIT_TIMEOUT, 10000).
+
+-record(data, {conn_pid}).
 
 %%%===================================================================
 %%% API functions
@@ -42,9 +44,8 @@ start() ->
 connect() ->
   gen_statem:cast(?SERVER, connect).
 
-get() ->
-  gen_statem:call(?SERVER, get).
-
+get_json() ->
+  gen_statem:call(?SERVER, get_json).
 
 %%%===================================================================
 %%% Callbacks
@@ -57,72 +58,49 @@ get() ->
 %% gen_statem:start_link/[3,4], this function is called by the new
 %% process to initialize.
 %%
-%% @spec init(Args) -> {CallbackMode, StateName, State} |
-%%                     {CallbackMode, StateName, State, Actions} |
+%% @spec init(Args) -> {CallbackMode, StateName, Data} |
+%%                     {CallbackMode, StateName, Data, Actions} |
 %%                     ignore |
 %%                     {stop, StopReason}
 %% @end
 %%--------------------------------------------------------------------
 init([]) ->
-  {ok, closed, #state{conn_pid = undefined}}.
+  {ok, closed, #data{conn_pid = undefined}}.
 
+%%--------------------------------------------------------------------
 callback_mode() ->
   state_functions.
 
-closed(EventType, EventContent = connect, State) ->
-  io:format("closed... [~p, ~p, ~p] ~n", [EventType, EventContent, State]),
+%%--------------------------------------------------------------------
+closed(_, connect, Data) ->
   {ok, ConnPid} = gun:open("localhost", 9222, #{http_opts => #{keepalive => infinity}}),
-  NextStateName = disconnected,
-  {next_state, NextStateName, State#state{conn_pid = ConnPid}, 10000}.
+  {next_state, disconnected, Data#data{conn_pid = ConnPid}, ?WAIT_TIMEOUT};
+
+closed(EventType, EventContent, Data) ->
+  handle_event(closed, EventType, EventContent, Data).
 
 %%--------------------------------------------------------------------
-%% @private
-%% @doc
-%% There should be one instance of this function for each possible
-%% state name.  If callback_mode is statefunctions, one of these
-%% functions is called when gen_statem receives and event from
-%% call/2, cast/2, or as a normal process message.
-%%
-%% @spec disconnected(Event, From, State) ->
-%%                   {next_state, NextStateName, NextState} |
-%%                   {next_state, NextStateName, NextState, Actions} |
-%%                   {stop, Reason, NewState} |
-%%    				 stop |
-%%                   {stop, Reason :: term()} |
-%%                   {stop, Reason :: term(), NewData :: data()} |
-%%                   {stop_and_reply, Reason, Replies} |
-%%                   {stop_and_reply, Reason, Replies, NewState} |
-%%                   {keep_state, NewData :: data()} |
-%%                   {keep_state, NewState, Actions} |
-%%                   keep_state_and_data |
-%%                   {keep_state_and_data, Actions}
-%% @end
-%%--------------------------------------------------------------------
-disconnected(EventType = timeout, EventContent, #state{conn_pid = ConnPid} = State) ->
-  io:format("disconnected... [~p, ~p, ~p] ~n", [EventType, EventContent, State]),
+disconnected(timeout, _, #data{conn_pid = ConnPid} = Data) ->
   gun:close(ConnPid),
-  NextStateName = closed,
-  {next_state, NextStateName, State#state{conn_pid = undefined}};
-disconnected(EventType = info, EventContent = {gun_up, ConnPid, http}, #state{conn_pid = ConnPid} = State) ->
-  io:format("disconnected... [~p, ~p, ~p] ~n", [EventType, EventContent, State]),
-  NextStateName = connected,
-  {next_state, NextStateName, State}.
+  {next_state, closed, Data#data{conn_pid = undefined}};
 
-connected({call, From} = EventType, EventContent = get, #state{conn_pid = ConnPid} = State) ->
-  io:format("connected... [~p, ~p, ~p] ~n", [EventType, EventContent, State]),
-  StreamRef = gun:get(ConnPid, "/json", [{<<"accept">>, "application/json"}]),
-  Data = case gun:await(ConnPid, StreamRef) of
-           {response, fin, _Status, _Headers} ->
-             no_data;
-           {response, nofin, _Status, _Headers} ->
-             {ok, Body} = gun:await_body(ConnPid, StreamRef),
-             Body
-         end,
-  {keep_state_and_data, [{reply, From, Data}]};
-connected(EventType = info, EventContent = {gun_down, ConnPid, http, closed, _, _}, #state{conn_pid = ConnPid} = State) ->
-  io:format("connected... [~p, ~p, ~p] ~n", [EventType, EventContent, State]),
-  NextStateName = disconnected,
-  {next_state, NextStateName, State}.
+disconnected(info, {gun_up, ConnPid, http}, #data{conn_pid = ConnPid} = Data) ->
+  {next_state, connected, Data};
+
+disconnected(EventType, EventContent, Data) ->
+  handle_event(disconnected, EventType, EventContent, Data).
+
+%%--------------------------------------------------------------------
+connected({call, From}, get_json, #data{conn_pid = ConnPid}) ->
+  Response = gun_get(ConnPid, "/json", [{<<"accept">>, "application/json"}]),
+  {keep_state_and_data, [{reply, From, Response}]};
+
+connected(info, {gun_down, ConnPid, http, closed, _, _}, #data{conn_pid = ConnPid} = Data) ->
+  gun:close(ConnPid),
+  {next_state, disconnected, Data#data{conn_pid = undefined}};
+
+connected(EventType, EventContent, Data) ->
+  handle_event(connected, EventType, EventContent, Data).
 
 %%--------------------------------------------------------------------
 %% @private
@@ -132,10 +110,10 @@ connected(EventType = info, EventContent = {gun_down, ConnPid, http, closed, _, 
 %% necessary cleaning up. When it returns, the gen_statem terminates with
 %% Reason. The return value is ignored.
 %%
-%% @spec terminate(Reason, StateName, State) -> void()
+%% @spec terminate(Reason, StateName, Data) -> void()
 %% @end
 %%--------------------------------------------------------------------
-terminate(_Reason, _StateName, _State) ->
+terminate(_Reason, _StateName, _Data) ->
   ok.
 
 %%--------------------------------------------------------------------
@@ -143,13 +121,27 @@ terminate(_Reason, _StateName, _State) ->
 %% @doc
 %% Convert process state when code is changed
 %%
-%% @spec code_change(OldVsn, StateName, State, Extra) ->
-%%                   {ok, StateName, NewState}
+%% @spec code_change(OldVsn, StateName, Data, Extra) ->
+%%                   {ok, StateName, NewData}
 %% @end
 %%--------------------------------------------------------------------
-code_change(_OldVsn, StateName, State, _Extra) ->
-  {ok, StateName, State}.
+code_change(_OldVsn, StateName, Data, _Extra) ->
+  {ok, StateName, Data}.
 
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
+
+handle_event(StateName, EventType, EventContent, Data) ->
+  io:format("handle_event... [~p, ~p, ~p, ~p]~n", [StateName, EventType, EventContent, Data]),
+  erlang:error(unhandled_event).
+
+gun_get(ConnPid, Path, Headers) ->
+  StreamRef = gun:get(ConnPid, Path, Headers),
+  case gun:await(ConnPid, StreamRef) of
+    {response, fin, _Status, _Headers} ->
+      no_data;
+    {response, nofin, _Status, _Headers} ->
+      {ok, Body} = gun:await_body(ConnPid, StreamRef),
+      Body
+  end.
