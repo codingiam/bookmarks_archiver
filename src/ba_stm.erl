@@ -14,9 +14,7 @@
 ]).
 
 -export([
-  closed/3,
-  disconnected/3,
-  connected/3
+  handle_event/4
 ]).
 
 -define(SERVER, ?MODULE).
@@ -48,7 +46,7 @@ stop() ->
   gen_statem:stop(?SERVER).
 
 connect() ->
-  gen_statem:call(?SERVER, connect).
+  gen_statem:cast(?SERVER, connect).
 
 get_json() ->
   gen_statem:call(?SERVER, get_json).
@@ -76,48 +74,35 @@ init([]) ->
 
 %%--------------------------------------------------------------------
 callback_mode() ->
-  state_functions.
+  handle_event_function.
 
 %%--------------------------------------------------------------------
-closed(cast, connect, Data) ->
+handle_event(cast, connect, closed, Data) ->
   {ok, ConnPid} = gun:open("localhost", 9222, #{http_opts => #{keepalive => infinity}}),
   _MRef = erlang:monitor(process, ConnPid),
   {next_state, disconnected, Data#data{conn_pid = ConnPid}, ?WAIT_TIMEOUT};
 
-closed({call, From}, connect, Data) ->
-  {ok, ConnPid} = gun:open("localhost", 9222, #{http_opts => #{keepalive => infinity}}),
-  _MRef = erlang:monitor(process, ConnPid),
-  {next_state, disconnected, Data#data{conn_pid = ConnPid, from = From}, {timeout, ?WAIT_TIMEOUT, From}};
-
-closed(EventType, EventContent, Data) ->
-  handle_event(closed, EventType, EventContent, Data).
-
-%%--------------------------------------------------------------------
-disconnected(timeout, From, #data{conn_pid = ConnPid} = Data) ->
-  io:format("disconnected(timeout, From, #data{conn_pid = ConnPid} = Data)~n"),
+handle_event(timeout, ?WAIT_TIMEOUT, disconnected, #data{conn_pid = ConnPid} = Data) ->
   gun:close(ConnPid),
-  {next_state, closed, Data#data{conn_pid = undefined}, [{reply, From, timeout}]};
+  {next_state, closed, Data#data{conn_pid = undefined}};
 
-disconnected(info, {gun_up, ConnPid, http}, #data{conn_pid = ConnPid, from = From} = Data) ->
-  io:format("disconnected(info, {gun_up, ConnPid, http}, #data{conn_pid = ConnPid} = Data)~n"),
-  {next_state, connected, Data, [{reply, From, connected}]};
+handle_event(info, {'DOWN', _MRef, process, ConnPid, _Reason}, closed, Data) ->
+  gun:close(ConnPid),
+  {next_state, closed, Data#data{conn_pid = undefined}};
 
-disconnected(EventType, EventContent, Data) ->
-  handle_event(disconnected, EventType, EventContent, Data).
+handle_event(info, {gun_up, ConnPid, http}, disconnected, #data{conn_pid = ConnPid} = Data) ->
+  {next_state, connected, Data};
 
-%%--------------------------------------------------------------------
-connected({call, From}, get_json, #data{conn_pid = ConnPid}) ->
-  io:format("connected({call, From}, get_json, #data{conn_pid = ConnPid})~n"),
+handle_event(info, {gun_down, ConnPid, http, closed, [], []}, connected, #data{conn_pid = ConnPid} = Data) ->
+  {next_state, disconnected, Data};
+
+handle_event({call, From}, get_json, connected, #data{conn_pid = ConnPid}) ->
   Response = gun_get(ConnPid, "/json", [{<<"accept">>, "application/json"}]),
   {keep_state_and_data, [{reply, From, Response}]};
 
-connected(info, {gun_down, ConnPid, http, closed, _, _} = P, #data{conn_pid = ConnPid} = Data) ->
-  io:format("connected(info, {gun_down, ConnPid, http, closed, _, _}, #data{conn_pid = ConnPid} = Data) ~n ~p ~n", [P]),
-%  gun:close(ConnPid),
-  {next_state, disconnected, Data#data{conn_pid = ConnPid}};
-
-connected(EventType, EventContent, Data) ->
-  handle_event(connected, EventType, EventContent, Data).
+handle_event(EventType, EventContent, State, Data) ->
+  io:format("handle_event... [~p, ~p, ~p, ~p]~n", [EventType, EventContent, State, Data]),
+  keep_state_and_data.
 
 %%--------------------------------------------------------------------
 %% @private
@@ -148,12 +133,6 @@ code_change(_OldVsn, StateName, Data, _Extra) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
-handle_event(_, info, {'DOWN', _MRef, process, ConnPid, _Reason}, Data) ->
-  gun:close(ConnPid),
-  {next_state, closed, Data#data{conn_pid = undefined}};
-handle_event(StateName, EventType, EventContent, Data) ->
-  io:format("handle_event... [~p, ~p, ~p, ~p]~n", [StateName, EventType, EventContent, Data]),
-  erlang:error(unhandled_event).
 
 gun_get(ConnPid, Path, Headers) ->
   StreamRef = gun:get(ConnPid, Path, Headers),
